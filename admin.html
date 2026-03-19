@@ -598,43 +598,128 @@ function resetForm(){
 
 /* GITHUB API */
 var API='https://api.github.com/repos/'+REPO_OWNER+'/'+REPO_NAME+'/contents/';
-function ghH(){return{'Authorization':'Bearer '+ghToken,'Content-Type':'application/json','Accept':'application/vnd.github+json'};}
+function ghH(){return{'Authorization':'Bearer '+ghToken,'Content-Type':'application/json','Accept':'application/vnd.github+json','X-GitHub-Api-Version':'2022-11-28'};}
+
 function ghFetch(method,path,body){
-  return fetch(API+path,{method:method,headers:ghH(),body:body?JSON.stringify(body):undefined})
-    .then(function(r){if(r.status===404)return null;return r.json().then(function(data){if(!r.ok)throw new Error(data.message||'GitHub error '+r.status);return data;});});
-}
-function loadData(){
-  return ghFetch('GET','artworks.json').then(function(f){
-    if(!f)return{list:[],sha:null};
-    var raw=atob(f.content.replace(/\n/g,''));return{list:JSON.parse(raw),sha:f.sha};
+  return fetch(API+path,{
+    method:method,
+    headers:ghH(),
+    body:body?JSON.stringify(body):undefined
+  }).then(function(r){
+    if(r.status===404)return null;
+    return r.json().then(function(data){
+      if(!r.ok)throw new Error(data.message||('GitHub '+r.status+' on '+path));
+      return data;
+    });
   });
 }
-function b64File(f){return new Promise(function(res,rej){var r=new FileReader();r.onload=function(e){res(e.target.result.split(',')[1]);};r.onerror=rej;r.readAsDataURL(f);});}
+
+function loadData(){
+  return ghFetch('GET','artworks.json').then(function(f){
+    if(!f)return{list:[],sha:null};  /* file doesn't exist yet — will be created */
+    try{
+      /* GitHub base64 can have line breaks — strip them */
+      var raw=atob(f.content.replace(/[\r\n\s]/g,''));
+      return{list:JSON.parse(raw),sha:f.sha};
+    }catch(e){
+      return{list:[],sha:f.sha};
+    }
+  });
+}
+
+function b64File(f){
+  return new Promise(function(res,rej){
+    var r=new FileReader();
+    r.onload=function(e){res(e.target.result.split(',')[1]);};
+    r.onerror=rej;
+    r.readAsDataURL(f);
+  });
+}
 
 /* PUBLISH */
 document.getElementById('publishBtn').addEventListener('click',function(){
-  if(!ghToken){showStatus('Go to GitHub Token settings and save your token first','err');return;}
+  if(!ghToken){showStatus('Save your GitHub token first — go to GitHub Token in the sidebar','err');return;}
   if(!pendingFile){showStatus('Select an image first','err');return;}
   var title=document.getElementById('fTitle').value.trim();
-  if(!title){showStatus('Enter a title','err');return;}
-  var btn=document.getElementById('publishBtn');btn.disabled=true;
-  var ext=(pendingFile.name.split('.').pop()||'jpg').toLowerCase();
-  var safe=title.toLowerCase().replace(/[^a-z0-9]+/g,'-')+'-'+Date.now()+'.'+ext;
+  if(!title){showStatus('Enter a title for this artwork','err');return;}
+
+  var btn=document.getElementById('publishBtn');
+  btn.disabled=true;
+  btn.textContent='Publishing…';
+
+  var ext=(pendingFile.name.split('.').pop()||'jpg').toLowerCase().replace(/[^a-z0-9]/g,'');
+  if(!ext||ext.length>4)ext='jpg';
+  var safe=title.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'')+'-'+Date.now()+'.'+ext;
   var imgPath='images/'+safe;
-  showStatus('Uploading image…','loading');
-  b64File(pendingFile).then(function(b64){
-    return ghFetch('PUT',imgPath,{message:'Upload '+safe,content:b64,branch:BRANCH});
-  }).then(function(){
-    showStatus('Saving artwork data…','loading');return loadData();
-  }).then(function(result){
-    var list=result.list;var sha=result.sha;
-    list.unshift({id:Date.now(),image:imgPath,title:title,type:document.getElementById('fType').value,subcategory:document.getElementById('fSubcat').value,description:document.getElementById('fDesc').value.trim(),size:document.getElementById('fSize').value.trim(),year:document.getElementById('fYear').value.trim(),price:document.getElementById('fPrice').value.trim(),featured:document.getElementById('fFeatured').checked,date:new Date().toISOString()});
-    var content=btoa(unescape(encodeURIComponent(JSON.stringify(list,null,2))));
-    return ghFetch('PUT','artworks.json',{message:'Add: '+title,content:content,sha:sha,branch:BRANCH}).then(function(){return list;});
-  }).then(function(list){
-    showStatus('✓ Published! Live in ~1 minute.','ok');resetForm();window._adminAW=list;switchPanel('works');renderList(list,'all');
-  }).catch(function(err){showStatus('Error: '+err.message,'err');})
-  .then(function(){btn.disabled=false;});
+
+  showStatus('Step 1/3 — Uploading image to GitHub…','loading');
+
+  b64File(pendingFile)
+  .then(function(b64){
+    /* upload image */
+    return ghFetch('PUT',imgPath,{
+      message:'Add image: '+safe,
+      content:b64,
+      branch:BRANCH
+    });
+  })
+  .then(function(resp){
+    if(!resp)throw new Error('Image upload failed — check your token has repo scope');
+    showStatus('Step 2/3 — Loading artworks list…','loading');
+    return loadData();
+  })
+  .then(function(result){
+    showStatus('Step 3/3 — Saving artwork data…','loading');
+    var list=result.list;
+    var sha=result.sha;
+
+    var entry={
+      id:Date.now(),
+      image:imgPath,
+      title:title,
+      type:document.getElementById('fType').value||'',
+      subcategory:document.getElementById('fSubcat').value||'',
+      description:document.getElementById('fDesc').value.trim()||'',
+      size:document.getElementById('fSize').value.trim()||'',
+      year:document.getElementById('fYear').value.trim()||'',
+      price:document.getElementById('fPrice').value.trim()||'',
+      featured:document.getElementById('fFeatured').checked,
+      date:new Date().toISOString()
+    };
+    list.unshift(entry);
+
+    /* encode to base64 safely */
+    var json=JSON.stringify(list,null,2);
+    var content=btoa(unescape(encodeURIComponent(json)));
+
+    var putBody={
+      message:'Publish artwork: '+title,
+      content:content,
+      branch:BRANCH
+    };
+    /* only include sha if file already exists — omitting it creates a new file */
+    if(sha) putBody.sha=sha;
+
+    return ghFetch('PUT','artworks.json',putBody).then(function(r){
+      if(!r)throw new Error('Failed to save artworks.json — try again');
+      return list;
+    });
+  })
+  .then(function(list){
+    showStatus('✓ Published! Your site updates in ~1 minute.','ok');
+    resetForm();
+    window._adminAW=list;
+    switchPanel('works');
+    renderList(list,'all');
+  })
+  .catch(function(err){
+    showStatus('✗ Error: '+err.message,'err');
+    console.error('[ST117 Admin] Publish error:',err);
+  })
+  .then(function(){
+    btn.disabled=false;
+    btn.textContent='Publish Artwork →';
+  });
 });
 
 /* WORKS LIST */
@@ -674,8 +759,9 @@ function toggleFeatured(id){
     var a=list.find(function(x){return x.id===id;});if(!a)throw new Error('Not found');
     a.featured=!a.featured;
     var content=btoa(unescape(encodeURIComponent(JSON.stringify(list,null,2))));
-    return ghFetch('PUT','artworks.json',{message:'Toggle featured: '+a.title,content:content,sha:sha,branch:BRANCH})
-      .then(function(){showStatus(a.featured?'★ Marked featured':'Removed from featured','ok');window._adminAW=list;renderList(list,activeLcat);});
+    var tfBody={message:'Toggle featured: '+a.title,content:content,branch:BRANCH};if(sha)tfBody.sha=sha;
+    return ghFetch('PUT','artworks.json',tfBody)
+      .then(function(){showStatus(a.featured?'★ Marked featured':'Removed from featured','ok');window._adminAW=list;try{localStorage.setItem('st117_aw_cache',JSON.stringify(list));}catch(e){}renderList(list,activeLcat);});
   }).catch(function(err){showStatus('Error: '+err.message,'err');});
 }
 
@@ -689,13 +775,14 @@ function deleteWork(id){
     toDelete=list.find(function(x){return x.id===id;});if(!toDelete)throw new Error('Not found');
     var updated=list.filter(function(x){return x.id!==id;});
     var content=btoa(unescape(encodeURIComponent(JSON.stringify(updated,null,2))));
-    return ghFetch('PUT','artworks.json',{message:'Delete: '+toDelete.title,content:content,sha:sha,branch:BRANCH}).then(function(){return updated;});
+    var delBody={message:'Delete: '+toDelete.title,content:content,branch:BRANCH};if(sha)delBody.sha=sha;
+    return ghFetch('PUT','artworks.json',delBody).then(function(){return updated;});
   }).then(function(updated){
     if(toDelete&&toDelete.image){
       return ghFetch('GET',toDelete.image).then(function(f){if(f&&f.sha)return ghFetch('DELETE',toDelete.image,{message:'Delete image',sha:f.sha,branch:BRANCH});}).catch(function(){}).then(function(){return updated;});
     }
     return updated;
-  }).then(function(updated){showStatus('✓ Deleted','ok');window._adminAW=updated;renderList(updated,activeLcat);})
+  }).then(function(updated){showStatus('✓ Deleted','ok');window._adminAW=updated;try{localStorage.setItem('st117_aw_cache',JSON.stringify(updated));}catch(e){}renderList(updated,activeLcat);})
   .catch(function(err){showStatus('Error: '+err.message,'err');});
 }
 
