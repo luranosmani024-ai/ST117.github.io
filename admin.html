@@ -568,7 +568,10 @@ body{background:var(--bg);color:var(--ink);font-family:'DM Sans',sans-serif;
                   <option value="balanced">Balanced — 80% quality, best web speed</option>
                 </select>
               </div>
-              <button class="btn-publish" id="publishBtn">Publish Artwork →</button>
+              <div style="display:flex;gap:.8rem;align-items:center;flex-wrap:wrap;">
+                <button class="btn-publish" id="publishBtn">Publish Artwork →</button>
+                <button id="cancelEditBtn" style="display:none;background:none;border:1px solid var(--glass-bdr);color:var(--ink-soft);font-family:'DM Sans',sans-serif;font-size:.6rem;font-weight:700;letter-spacing:.14em;text-transform:uppercase;padding:.85rem 1.4rem;border-radius:var(--rad-btn);cursor:pointer;transition:all .2s;" onclick="cancelEdit()">Cancel Edit</button>
+              </div>
             </div>
           </div>
         </div>
@@ -733,7 +736,10 @@ function switchPanel(id){
   if(id==='featured') loadFeaturedPanel();
 }
 document.querySelectorAll('.nav-item').forEach(function(btn){
-  btn.addEventListener('click', function(){ switchPanel(btn.dataset.panel); });
+  btn.addEventListener('click', function(){
+    switchPanel(btn.dataset.panel);
+    if(btn.dataset.panel==='works'&&window._aw){renderList(window._aw,activeLcat);}
+  });
 });
 
 /* ── MOBILE SIDEBAR ── */
@@ -798,8 +804,8 @@ function ghFetch(method, path, body){
     });
 }
 function loadData(){
-  return ghFetch('GET','artworks.json').then(function(f){
-    if(!f) return {list:[],sha:null};
+  return ghFetch('GET','artworks.json').catch(function(){ return null; }).then(function(f){
+    if(!f) return {list:[],sha:null}; /* first publish — file doesn't exist yet */
     try{ return {list:JSON.parse(atob(f.content.replace(/[\r\n\s]/g,''))), sha:f.sha}; }
     catch(e){ return {list:[],sha:f.sha}; }
   });
@@ -881,9 +887,13 @@ function resetForm(){
 /* ── PUBLISH ── */
 document.getElementById('publishBtn').addEventListener('click', function(){
   if(!ghToken){ showStatus('Save your GitHub token first (GitHub Token in sidebar)','err'); return; }
-  if(!pendingFile){ showStatus('Select an image first','err'); return; }
   var title = document.getElementById('fTitle').value.trim();
-  if(!title){ showStatus('Enter a title for this artwork','err'); return; }
+  if(!title){ showStatus('Enter a title','err'); return; }
+
+  /* EDIT MODE — no new image required */
+  if(editingId){ saveEditedWork(editingId, title); return; }
+
+  if(!pendingFile){ showStatus('Select an image first','err'); return; }
 
   var btn = document.getElementById('publishBtn'); btn.disabled=true; btn.textContent='Publishing…';
   var ext = 'jpg'; /* always JPEG after compression */
@@ -932,6 +942,55 @@ document.getElementById('publishBtn').addEventListener('click', function(){
   .then(function(){ btn.disabled=false; btn.textContent='Publish Artwork →'; });
 });
 
+
+
+/* ── EDIT STATE ── */
+var editingId = null;
+
+function openEditPanel(id){
+  var art=(window._aw||[]).find(function(x){return x.id===id;});
+  if(!art){showStatus('Artwork not found','err');return;}
+  editingId=id;
+  /* fill form */
+  document.getElementById('fTitle').value=art.title||'';
+  var typeEl=document.getElementById('fType');
+  typeEl.value=art.type||'';
+  typeEl.dispatchEvent(new Event('change'));
+  setTimeout(function(){
+    var sc=document.getElementById('fSubcat');
+    if(sc)sc.value=art.subcategory||'';
+  },60);
+  document.getElementById('fDesc').value=art.description||'';
+  document.getElementById('fSize').value=art.size||'';
+  document.getElementById('fYear').value=art.year||'';
+  document.getElementById('fPrice').value=art.price||'';
+  document.getElementById('fFeatured').checked=!!art.featured;
+  /* show current image preview */
+  var prev=document.getElementById('dropPrev');
+  if(prev){prev.src='https://raw.githubusercontent.com/'+OWNER+'/'+REPO+'/main/'+art.image;prev.style.display='block';}
+  var fname=document.getElementById('dropFname');
+  if(fname){fname.textContent='Current image — drop new one to replace';fname.style.display='block';}
+  ['dropIcon','dropMain','dropHint'].forEach(function(id){
+    var el=document.getElementById(id);if(el)el.style.display='none';
+  });
+  pendingFile=null; /* clear any stale file */
+  /* update UI */
+  document.getElementById('publishBtn').textContent='Save Changes →';
+  var ph=document.querySelector('.ph h1');if(ph)ph.textContent='Edit Artwork';
+  var cb=document.getElementById('cancelEditBtn');if(cb)cb.style.display='inline-flex';
+  switchPanel('upload');
+  showStatus('Editing "'+esc(art.title)+'" — update fields and press Save Changes →','loading');
+}
+
+function cancelEdit(){
+  editingId=null;
+  pendingFile=null;
+  resetForm();
+  document.getElementById('publishBtn').textContent='Publish Artwork →';
+  var ph=document.querySelector('.ph h1');if(ph)ph.textContent='Publish Artwork';
+  var sb=document.getElementById('statusBar');if(sb)sb.className='status';
+  var cb=document.getElementById('cancelEditBtn');if(cb)cb.style.display='none';
+}
 
 /* called when in edit mode */
 function saveEditedWork(id, title){
@@ -1183,11 +1242,11 @@ window.saveArtist=function(n){
 };
 document.getElementById('aPhoto1').addEventListener('change',function(){
   var f=this.files[0];if(!f)return;
-  var r=new FileReader();r.onload=function(e){localStorage.setItem('st117_photo1',e.target.result);loadAPhoto('st117_photo1','aImg1','aPrev1');showStatus('✓ Artist 1 photo saved','ok');};r.readAsDataURL(f);
+  var r1=new FileReader();r1.onload=function(e){localStorage.setItem('st117_photo1',e.target.result);loadAPhoto('st117_photo1','aImg1','aPrev1');showStatus('✓ Artist 1 photo saved','ok');};r1.readAsDataURL(f);
 });
 document.getElementById('aPhoto2').addEventListener('change',function(){
   var f=this.files[0];if(!f)return;
-  var r=new FileReader();r.onload=function(e){localStorage.setItem('st117_photo2',e.target.result);loadAPhoto('st117_photo2','aImg2','aPrev2');showStatus('✓ Artist 2 photo saved','ok');};r.readAsDataURL(f);
+  var r2=new FileReader();r2.onload=function(e){localStorage.setItem('st117_photo2',e.target.result);loadAPhoto('st117_photo2','aImg2','aPrev2');showStatus('✓ Artist 2 photo saved','ok');};r2.readAsDataURL(f);
 });
 
 /* ── INIT ── */
