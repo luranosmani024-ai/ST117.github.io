@@ -800,7 +800,13 @@ function ghFetch(method, path, body){
   return fetch(API+path, {method:method, headers:ghH(), body:body?JSON.stringify(body):undefined})
     .then(function(r){
       if(r.status===404) return null;
-      return r.json().then(function(data){ if(!r.ok) throw new Error(data.message||'GitHub '+r.status+' on '+path); return data; });
+      if(r.status===422) return r.json().then(function(data){
+        throw new Error('SHA conflict — try again ('+( data.message||'422')+'). If this keeps happening, reload the admin page.');
+      });
+      return r.json().then(function(data){
+        if(!r.ok) throw new Error(data.message||'GitHub error '+r.status+' on '+path);
+        return data;
+      });
     });
 }
 function loadData(){
@@ -907,7 +913,7 @@ document.getElementById('publishBtn').addEventListener('click', function(){
     return ghFetch('PUT', imgPath, {message:'Add image: '+safe, content:b64, branch:BRANCH});
   })
   .then(function(resp){
-    if(!resp) throw new Error('Image upload failed — confirm token has "repo" scope');
+    if(!resp||!resp.content) throw new Error('Image upload failed — check token has "repo" or "contents:write" scope');
     showStatus('Step 2/3 — Loading artwork list…','loading');
     return loadData();
   })
@@ -929,7 +935,7 @@ document.getElementById('publishBtn').addEventListener('click', function(){
     var body = {message:'Publish: '+title, content:content, branch:BRANCH};
     if(sha) body.sha=sha;
     return ghFetch('PUT','artworks.json',body).then(function(r){
-      if(!r) throw new Error('Failed to save artworks.json — try again');
+      if(!r||(!r.content&&!r.commit)) throw new Error('Failed to save artworks.json — try again');
       return list;
     });
   })
